@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hatıra Fotoğraf Kabini – T3 Adana</title>
+<style>
+:root{--g:#0b6b3a;--g2:#1f9d55;--r:#c8202a;--bg:#f2f7f3;--tx:#1d2a22}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;display:flex;flex-direction:column;align-items:center}
+header{width:100%;background:#fff;display:flex;justify-content:center;align-items:center;gap:24px;padding:10px;border-bottom:4px solid var(--g2)}
+header img{height:54px}
+h1{font-size:1.4rem;margin:14px 12px 4px;text-align:center;color:var(--g)}
+p.sub{margin:0 12px 10px;text-align:center;opacity:.8}
+#stage{position:relative;width:min(92vw,520px);aspect-ratio:4/5;background:#000;border-radius:18px;overflow:hidden;box-shadow:0 8px 28px #0003}
+#stage video,#stage canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#video{transform:scaleX(-1)}
+#count{position:absolute;inset:0;display:none;align-items:center;justify-content:center;font-size:9rem;font-weight:800;color:#fff;text-shadow:0 4px 20px #000a}
+#busy{position:absolute;inset:0;background:#000b;color:#fff;display:none;align-items:center;justify-content:center;font-size:1.3rem;text-align:center;padding:20px}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:14px 10px}
+button{font:inherit;font-weight:700;border:0;border-radius:14px;padding:14px 22px;background:var(--g);color:#fff;cursor:pointer;font-size:1.05rem}
+button.alt{background:#fff;color:var(--g);border:2px solid var(--g)}
+button.red{background:var(--r)}
+button:disabled{opacity:.5}
+.theme{width:56px;height:56px;border-radius:50%;border:4px solid #fff;box-shadow:0 0 0 2px #0004;padding:0}
+.theme.on{box-shadow:0 0 0 4px var(--r)}
+#mailbox{display:none;width:min(92vw,520px);margin-bottom:24px}
+#mailbox input[type=email]{width:100%;font:inherit;padding:14px;border-radius:12px;border:2px solid #9bb8a5;margin-bottom:8px}
+label.k{display:flex;gap:8px;font-size:.85rem;margin-bottom:10px;align-items:flex-start}
+#msg{text-align:center;font-weight:600;min-height:1.4em}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<header><img src="logo-festival.png" alt="Festival"><img src="logo-ttt.png" alt="Türkiye Teknoloji Takımı"></header>
+<h1>Hatıra Fotoğrafını Çekelim!</h1>
+<p class="sub">Fotoğrafını çek, arkaplanını değiştirelim, e-postana gönderelim.</p>
+
+<div id="stage">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="result" class="hide"></canvas>
+  <div id="count"></div>
+  <div id="busy">Fotoğraf hazırlanıyor…</div>
+</div>
+
+<div class="row" id="rowShoot"><button id="btnShoot">📸 Fotoğraf Çek</button></div>
+
+<div id="rowResult" class="hide">
+  <div class="row" id="themes"></div>
+  <div class="row">
+    <button class="alt" id="btnRetake">↺ Yeniden Çek</button>
+    <button class="alt" id="btnDownload">⬇ Kaydet</button>
+    <button id="btnMail">✉ E-posta ile Gönder</button>
+  </div>
+</div>
+
+<div id="mailbox">
+  <input type="email" id="email" placeholder="E-posta adresin" autocomplete="email">
+  <label class="k"><input type="checkbox" id="kvkk"> Fotoğrafımın yalnızca bana gönderilmek üzere işlenmesini kabul ediyorum. Fotoğraf ve e-posta adresim kaydedilmez.</label>
+  <button id="btnSend" style="width:100%">Gönder</button>
+</div>
+<div id="msg"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js"></script>
+<script>
+// ====== AYAR: Google Apps Script web uygulaması URL'sini buraya yapıştır ======
+const MAIL_ENDPOINT = "https://script.google.com/macros/s/AKfycbyRwX3FRoyzMgjoUsum5JkuCIuCOVQU4UVQbHJwKLvzTQQHopS7mU4SbT6ZsZ1i0dy5nQ/exec";
+// ===========================================================================
+const W=1080,H=1350;
+const $=id=>document.getElementById(id);
+const THEMES=[
+ {n:"Yeşilay",c:["#0b6b3a","#1f9d55","#8ad39f"],a:"#ffd54a"},
+ {n:"Gökyüzü",c:["#0b5fa5","#2aa0e0","#a8dcf5"],a:"#ffffff"},
+ {n:"Gün Batımı",c:["#b3182a","#ee6a2a","#ffc547"],a:"#ffffff"}
+];
+let theme=0,cutout=null;
+const imgs={};
+["logo-festival.png","logo-ttt.png"].forEach(f=>{const i=new Image();i.src=f;imgs[f]=i});
+
+// kamera
+async function startCam(){
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1920},height:{ideal:1440}},audio:false});
+    $("video").srcObject=s;
+  }catch(e){$("msg").textContent="Kamera açılamadı. Tarayıcı izni verin ve sayfayı https üzerinden açın."}
+}
+startCam();
+
+// arkaplan silme (tarayıcıda çalışır; ücretsiz, sınırsız, görsel sunucuya gitmez)
+const seg=new SelfieSegmentation({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${f}`});
+seg.setOptions({modelSelection:0});
+let resolveSeg;
+seg.onResults(r=>resolveSeg(r));
+function segment(canvas){return new Promise(async res=>{resolveSeg=res;await seg.send({image:canvas})})}
+
+function capture(){
+  const v=$("video"),vw=v.videoWidth,vh=v.videoHeight;
+  let ch=vh,cw=vh*0.8; if(cw>vw){cw=vw;ch=vw/0.8}
+  const c=document.createElement("canvas");c.width=W;c.height=H;
+  const x=c.getContext("2d");
+  x.translate(W,0);x.scale(-1,1);
+  x.drawImage(v,(vw-cw)/2,(vh-ch)/2,cw,ch,0,0,W,H);
+  return c;
+}
+
+async function shoot(){
+  $("btnShoot").disabled=true;$("msg").textContent="";
+  const cnt=$("count");cnt.style.display="flex";
+  for(let i=3;i>0;i--){cnt.textContent=i;await new Promise(r=>setTimeout(r,1000))}
+  cnt.style.display="none";
+  const frame=capture();
+  $("busy").style.display="flex";
+  try{
+    const r=await segment(frame);
+    const c=document.createElement("canvas");c.width=W;c.height=H;
+    const x=c.getContext("2d");
+    x.filter="blur(2.5px)";x.drawImage(r.segmentationMask,0,0,W,H);x.filter="none";
+    x.globalCompositeOperation="source-in";x.drawImage(frame,0,0,W,H);
+    cutout=c;
+  }catch(e){$("busy").style.display="none";$("btnShoot").disabled=false;$("msg").textContent="Arkaplan silinemedi, tekrar deneyin.";return}
+  $("busy").style.display="none";
+  $("video").classList.add("hide");$("result").classList.remove("hide");
+  $("rowShoot").classList.add("hide");$("rowResult").classList.remove("hide");
+  $("btnShoot").disabled=false;
+  render();
+}
+
+function rr(x,a,b,w,h,r){x.beginPath();x.roundRect(a,b,w,h,r);x.fill()}
+function render(){
+  const cv=$("result");cv.width=W;cv.height=H;
+  const x=cv.getContext("2d"),t=THEMES[theme];
+  const g=x.createLinearGradient(0,0,W*0.4,H);
+  g.addColorStop(0,t.c[0]);g.addColorStop(0.55,t.c[1]);g.addColorStop(1,t.c[2]);
+  x.fillStyle=g;x.fillRect(0,0,W,H);
+  // dekoratif daireler
+  x.fillStyle="#ffffff18";
+  [[120,520,170],[960,640,220],[880,1000,150],[200,1000,200],[540,760,330]].forEach(([a,b,r])=>{x.beginPath();x.arc(a,b,r,0,7);x.fill()});
+  x.fillStyle=t.a+"55";
+  [[80,420,26],[1000,460,18],[950,880,30],[90,860,20],[760,380,14]].forEach(([a,b,r])=>{x.beginPath();x.arc(a,b,r,0,7);x.fill()});
+  // üst panel: festival logosu
+  x.fillStyle="#fff";rr(x,90,36,900,300,40);
+  const f=imgs["logo-festival.png"];x.drawImage(f,150,46,780,345*0.78);
+  // kişi
+  const s=0.9,pw=W*s,ph=H*s;
+  x.shadowColor="#0006";x.shadowBlur=30;
+  x.drawImage(cutout,(W-pw)/2,330,pw,ph);
+  x.shadowBlur=0;
+  // alt bant
+  x.fillStyle="#fff";x.fillRect(0,H-170,W,170);
+  x.fillStyle=t.c[1];x.fillRect(0,H-170,W,10);
+  const l=imgs["logo-ttt.png"];x.drawImage(l,30,H-150,390,390*647/1682*1.0);
+  x.fillStyle=t.c[0];x.textAlign="right";
+  x.font="800 34px system-ui,Arial,sans-serif";x.fillText("Güçlü Aileler, Bağımsız Yarınlar",W-34,H-95);
+  x.font="600 26px system-ui,Arial,sans-serif";x.fillText("T3 Vakfı Adana • 2. Yeşilay Bağımsız Aile Festivali",W-34,H-50);
+}
+
+// tema seçici
+THEMES.forEach((t,i)=>{
+  const b=document.createElement("button");b.className="theme"+(i?"":" on");
+  b.style.background=`linear-gradient(135deg,${t.c[0]},${t.c[2]})`;b.title=t.n;
+  b.onclick=()=>{theme=i;document.querySelectorAll(".theme").forEach((e,j)=>e.classList.toggle("on",j==i));render()};
+  $("themes").appendChild(b);
+});
+
+function retake(){
+  $("video").classList.remove("hide");$("result").classList.add("hide");
+  $("rowShoot").classList.remove("hide");$("rowResult").classList.add("hide");
+  $("mailbox").style.display="none";$("msg").textContent="";cutout=null;
+}
+function download(){
+  const a=document.createElement("a");a.download="hatira-t3adana.jpg";a.href=$("result").toDataURL("image/jpeg",0.95);a.click();
+}
+async function send(){
+  const em=$("email").value.trim();
+  if(!/^\S+@\S+\.\S+$/.test(em)){$("msg").textContent="Geçerli bir e-posta adresi yazın.";return}
+  if(!$("kvkk").checked){$("msg").textContent="Lütfen onay kutusunu işaretleyin.";return}
+  if(!MAIL_ENDPOINT){$("msg").textContent="Mail ayarı yapılmamış (MAIL_ENDPOINT boş).";return}
+  $("btnSend").disabled=true;$("msg").textContent="Gönderiliyor…";
+  try{
+    await fetch(MAIL_ENDPOINT,{method:"POST",mode:"no-cors",headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({email:em,image:$("result").toDataURL("image/jpeg",0.93).split(",")[1]})});
+    $("msg").textContent="✅ Gönderildi! Gelen kutunu (gerekirse spam klasörünü) kontrol et.";
+    $("email").value="";$("kvkk").checked=false;
+    setTimeout(retake,6000);
+  }catch(e){$("msg").textContent="Gönderilemedi, internet bağlantısını kontrol edip tekrar deneyin."}
+  $("btnSend").disabled=false;
+}
+$("btnShoot").onclick=shoot;$("btnRetake").onclick=retake;$("btnDownload").onclick=download;
+$("btnMail").onclick=()=>{$("mailbox").style.display="block";$("email").focus()};
+$("btnSend").onclick=send;
+</script>
+</body>
+</html>
